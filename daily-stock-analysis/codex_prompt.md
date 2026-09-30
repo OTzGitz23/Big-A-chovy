@@ -6,7 +6,7 @@
 
 ## 数据源 1：实时 API（看当前快照）
 
-服务器运行在 `http://localhost:8765`，以下接口可用：
+服务器运行在 `http://localhost:38473`，以下接口可用：
 
 ### GET /api/data
 返回最新一次筛选的完整 JSON 结果。关键字段：
@@ -32,9 +32,9 @@ meta                — 筛选时间、耗时、缓存命中率等
 
 **读取方式：**
 ```bash
-curl -s http://localhost:8765/api/data
-curl -s http://localhost:8765/api/status
-curl -s http://localhost:8765/api/md
+curl -s http://localhost:38473/api/data
+curl -s http://localhost:38473/api/status
+curl -s http://localhost:38473/api/md
 ```
 
 如果连接失败，说明服务器没开，告诉大强去运行 `运行实时看板.command`。

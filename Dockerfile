@@ -40,6 +40,11 @@ RUN mkdir -p /app/runtime /app/筛选结果 /app/决策记录 /app/tools/shadow_
 
 EXPOSE 8765
 
+# The workbench default is an uncommon port to avoid collisions on a dev box;
+# inside the container we pin 8765 so EXPOSE, the healthcheck and the
+# docker-compose port mapping keep working unchanged.
+ENV WORKBENCH_PORT=8765
+
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/api/status', timeout=4)"
 

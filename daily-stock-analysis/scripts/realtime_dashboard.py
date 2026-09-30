@@ -5,7 +5,7 @@ Uses the cached engine (realtime_engine.py) to run screening in a background
 thread during trading hours, and serves a web dashboard for monitoring.
 
 No external dependencies — uses only Python standard library.
-Run: python3 realtime_dashboard.py  then open http://localhost:8765
+Run: python3 realtime_dashboard.py  then open http://localhost:38473
 Use --no-browser to suppress automatic browser opening.
 """
 from __future__ import annotations
@@ -205,7 +205,10 @@ STATIC_DIR = SCRIPT_DIR / "realtime_static"
 # 两个入口共用的导航与运行状态条：工作台 handler 继承本模块的静态路由，
 # 因此只需在这里挂一次（见 do_GET 的 /common.css、/common.js）。
 SHARED_STATIC_DIR = SCRIPT_DIR / "shared_static"
-PORT = 8765
+# 默认端口刻意避开常见端口（8765/8000/8080/3000 等）与 Windows 动态保留段
+# （44xxx~48xxx 在本机实测绑定会被拒），减少与其它服务、代理软件、开发工具撞车。
+# 可用环境变量 WORKBENCH_PORT 覆盖；web_workbench 在端口不可用时还会自动顺延。
+PORT = int(os.environ.get("WORKBENCH_PORT") or 38473)
 # 单次筛选硬超时（秒）。健康刷新通常 5~10s（K线走缓存）；若代理在筛选中途掉线，
 # 引擎会在超时附近空耗，这里兜底中止该轮，标记代理不可用并保留快照，
 # 避免前端一直停在「筛选中」。

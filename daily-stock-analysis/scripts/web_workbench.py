@@ -16,8 +16,8 @@
     Windows 需要 tzdata 包提供 IANA 时区（代码内自动提示）。
 
 运行：
-  python web_workbench.py [--port 8765] [--no-browser]
-  浏览器打开 http://localhost:8765/workbench （实时看板仍在 /）
+  python web_workbench.py [--port 47321] [--no-browser]
+  浏览器打开 http://localhost:47321/workbench （实时看板仍在 /）
 """
 from __future__ import annotations
 
@@ -117,7 +117,7 @@ def _kill_stale_port_windows(port: int) -> None:
     pids: set[str] = set()
     for line in out.splitlines():
         parts = line.split()
-        # TCP    0.0.0.0:8765    0.0.0.0:0    LISTENING    12345
+        # TCP    0.0.0.0:47321    0.0.0.0:0    LISTENING    12345
         if len(parts) >= 5 and parts[0].upper() == "TCP" and parts[3].upper() == "LISTENING":
             local = parts[1]
             if local.rsplit(":", 1)[-1] == str(port):
@@ -608,18 +608,44 @@ def main() -> int:
     if sys.platform == "win32":
         _kill_stale_port_windows(args.port)
 
-    try:
-        server = ThreadingHTTPServer((args.host, args.port), WorkbenchHandler)
-    except OSError as e:
-        print(f"[workbench] 端口 {args.port} 被占用（{e}）。请先停掉旧进程："
-              f" web_workbench.py --port {args.port + 1}", file=sys.stderr)
+    # 绑定端口：默认端口可能被占用（旧进程残留），也可能落在 Windows 动态保留
+    # 段里而直接抛 WinError 10013（不是"被占用"，但同样 bind 不上）。这两种情况
+    # 都顺延到相邻端口重试，避免因为一个端口就用不了。
+    server = None
+    bound_port = args.port
+    for candidate in range(args.port, args.port + 10):
+        try:
+            server = ThreadingHTTPServer((args.host, candidate), WorkbenchHandler)
+        except OSError as e:
+            if candidate == args.port:
+                print(f"[workbench] 端口 {candidate} 不可用（{e}），尝试顺延 ...", file=sys.stderr)
+            continue
+        bound_port = candidate
+        break
+
+    if server is None:
+        print(f"[workbench] 端口 {args.port}~{args.port + 9} 均不可用，请手动指定："
+              f" web_workbench.py --port <其它端口>", file=sys.stderr)
         return 1
+
+    if bound_port != args.port:
+        print(f"[workbench] 已改用端口 {bound_port}（原 {args.port} 不可用）", file=sys.stderr)
+
+    # 把本工作台的服务器交给看板调度器，使 15:15 收盘自动退出对本进程生效。
+    # 缺了这一步，调度器只会去关 realtime_dashboard 直启模式下的模块级 _server
+    # （此处为 None），于是调度线程自行退出而主线程 serve_forever() 永久阻塞，
+    # 进程一直挂到下次启动被 _kill_stale_port_windows 杀掉。
+    def _shutdown_workbench_server() -> None:
+        threading.Thread(target=server.shutdown, daemon=True).start()
+
+    dash._server = server
+    dash.scheduler.shutdown_hook = _shutdown_workbench_server
 
     if args.no_dashboard_refresh:
         print("[workbench] dashboard auto-refresh disabled (--no-dashboard-refresh)", file=sys.stderr)
     else:
         dash.scheduler.start()  # 看板自动刷新（交易时段内每 interval 秒一轮）
-    url = f"http://localhost:{args.port}"
+    url = f"http://localhost:{bound_port}"
     print(f"[workbench] server running at {url}")
     print(f"[workbench] 工作台: {url}/workbench   实时看板: {url}/")
     print(f"[workbench] trading hours: {dash.is_trading_hours()}")

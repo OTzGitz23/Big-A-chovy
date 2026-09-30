@@ -18,7 +18,7 @@
 
 - 后端：Python 标准库 `http.server`，复用看板已验证的 `realtime_engine` 管线（含 `network_path` 直连/代理实测择优）。
 - 前端：原生 HTML/JS/CSS，无外部 CDN 依赖，离线可用；与实时看板同一套 Catppuccin 配色。
-- 单端口 8765 同时提供工作台与原版实时看板，原有看板 API（`/api/data`、`/api/status` 等）完全不变；Docker 也通过工作台入口提供两套页面。
+- 单端口 38473 同时提供工作台与原版实时看板，原有看板 API（`/api/data`、`/api/status` 等）完全不变；Docker 也通过工作台入口提供两套页面。
 
 ## 两个入口的统一（导航 / 状态 / 术语）
 
@@ -56,12 +56,12 @@ python3 daily-stock-analysis/scripts/web_workbench.py
 
 `docker-compose.yml` 启动工作台与实时看板，原有看板路径不变。宿主机端口默认只绑定 `127.0.0.1`，避免把报告和持仓快照暴露到局域网。
 
-如确实需要局域网访问，请先确认网络可信，再把 compose 端口映射改为 `8765:8765`，不要把端口直接暴露到公网。
+如确实需要局域网访问，请先确认网络可信，再把 compose 端口映射改为 `38473:38473`，不要把端口直接暴露到公网。
 
 浏览器打开：
 
-- 工作台：<http://localhost:8765/workbench>
-- 实时看板：<http://localhost:8765/>
+- 工作台：<http://localhost:38473/workbench>
+- 实时看板：<http://localhost:38473/>
 
 ## 功能清单
 

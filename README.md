@@ -61,8 +61,8 @@ uv run --python 3.13 --with requests --with pyyaml --with tzdata python daily-st
 python3 daily-stock-analysis/scripts/web_workbench.py
 ```
 
-- 工作台：<http://localhost:8765/workbench>（一次性筛选 + 报告库 + 工具箱）
-- 实时看板：<http://localhost:8765/>（原版页面不变）
+- 工作台：<http://localhost:38473/workbench>（一次性筛选 + 报告库 + 工具箱）
+- 实时看板：<http://localhost:38473/>（原版页面不变）
 
 两个页面共用同一套导航与运行状态：顶部同一组视图切换「实时看板｜筛选工作台」（同页切换、标出当前位置），下方同一条运行状态条显示**数据时点 / 数据源 / 自动刷新 / 引擎占用**，并把会影响判读的异常做成旗标（降级数据、最近快照、行情不完整、东财冷却、代理断开、**公告检查或资金排名被关闭**）。看板顶部原来分散的「数据时间 / 数据源 / 下次刷新 / 行情不完整 / K 线缓存」五处展示已收敛进这条状态条，同一事实不再重复出现。
 
@@ -87,7 +87,7 @@ cp .env.example .env       # 不需要代理时也可以跳过
 docker compose up -d --build
 ```
 
-浏览器打开 <http://localhost:8765/workbench> 使用工作台，打开 <http://localhost:8765/> 查看实时看板；查看状态或日志：
+浏览器打开 <http://localhost:38473/workbench> 使用工作台，打开 <http://localhost:38473/> 查看实时看板；查看状态或日志：
 
 ```bash
 docker compose ps
@@ -174,7 +174,7 @@ daily-stock-analysis/运行实时看板.command
 python3 daily-stock-analysis/scripts/realtime_dashboard.py
 ```
 
-浏览器打开：<http://localhost:8765>
+浏览器打开：<http://localhost:38473>
 
 看板默认在交易时段自动刷新，启动时会预热日 K 缓存；行情不可用时会尽量保留最近一次完整结果。停止看板可以双击：
 
@@ -187,9 +187,9 @@ daily-stock-analysis/停止实时看板.command
 看板提供以下本机接口：
 
 ```bash
-curl -s http://localhost:8765/api/data    # 最新完整 JSON
-curl -s http://localhost:8765/api/status  # 运行状态和缓存状态
-curl -s http://localhost:8765/api/md      # 最新 Markdown 报告
+curl -s http://localhost:38473/api/data    # 最新完整 JSON
+curl -s http://localhost:38473/api/status  # 运行状态和缓存状态
+curl -s http://localhost:38473/api/md      # 最新 Markdown 报告
 ```
 
 ## 二、筛选模块说明
@@ -320,7 +320,7 @@ git diff --cached --name-only
    ```
 
 3. 需要诊断单一路径时，可用 `--network-mode direct` 或 `--network-mode proxy`；正常使用建议保留 `auto`。
-4. 看板无法连接时，确认 `8765` 端口没有被旧进程占用，并运行停止脚本后重新启动。
+4. 看板无法连接时，确认 `38473` 端口没有被旧进程占用，并运行停止脚本后重新启动。
 5. 行情接口部分失败时，不要把降级结果当成完整实时结果；优先等待网络恢复。
 6. 当前筛选列表、基本面查询和实时 1 分钟趋势分别使用东财 `push2/webguest` 的 `clist`、`ulist.np`、`stock/get`、`trends2` 路由。**日 K 按三档依次下沉：腾讯前复权（`ifzq.gtimg.cn` / `proxy.finance.qq.com` / `web.ifzq.gtimg.cn`，带连续失败熔断）→ 东财 `push2his` 前复权（`klt=101&fqt=1`，另有数字子域）→ 新浪（末档，可能不复权且可能缺当日 bar）**。前两档来自不同厂商，因此互相兜底：腾讯被 WAF 拦截时由东财顶上，东财被限流/封禁时由腾讯顶上。2026-09-28 复测：东财日 K 已恢复可用且为前复权（与腾讯同日收盘差 ≤0.2%），沪深主板/创业板/科创板/北交所均返回。降级不会被静默掩盖——报告头部「来源」按本轮实际来源生成，报告警告逐轮报出「本轮 N 只来自新浪」以及其中多少只**与前复权基准的日期或收盘不一致**（偏差 >1%；基准由前两档的成功结果维护）。同日实测：腾讯整链故障约 47 分钟期间走新浪，与前复权基准收盘差 1.4%–2.7%、5 日涨幅差最多 2.2 倍，超短池被压掉约一半。可用 `python3 tools/verify_em_webguest.py` 对比标准入口、`/webguest` 路由和 K 线降级路径。
 7. 请求频率、限流参数，以及「限流」与「路径下线」的区分方法见 [`docs/东财请求频率与限流.md`](docs/东财请求频率与限流.md)。
