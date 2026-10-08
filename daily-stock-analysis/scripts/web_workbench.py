@@ -71,7 +71,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import realtime_dashboard as dash  # noqa: E402  （导入时完成网络路径预热）
 
-REPORTS_DIR = PROJECT_ROOT / "筛选结果"
+# 报告归档目录与看板共用同一来源：两者都受 A_SHARE_REPORT_DIR 控制，
+# 避免“验证跑”把产物写进当日的 筛选结果/ 序列。
+REPORTS_DIR = dash.MD_OUTPUT_DIR
 WORKBENCH_STATIC = SCRIPT_DIR / "workbench_static"
 SCREENING_TIMEOUT_WB = 900  # 一次性筛选硬超时（秒）。Windows 冷缓存+SSL握手慢，实测数百秒；
 # 引擎 K 线缓存预热后，后续轮次会快很多
@@ -147,6 +149,7 @@ class ScreenJob:
     def __init__(self) -> None:
         self.state = "idle"  # idle | running | done | error
         self.params: dict = {}
+        self.config_snapshot: dict | None = None
         self.result: dict | None = None
         self.md_text: str | None = None
         self.md_path: str | None = None
@@ -160,6 +163,8 @@ class ScreenJob:
         if self.state == "running" or self.zombie:
             return {"status": "already_running" if self.state == "running" else "busy",
                     "reason": "上一次筛选仍在后台执行中，等它结束后再试" if self.zombie else None}
+        # 公告检查是一票否决门禁：不接受前端传来的关闭请求，一律按开启执行。
+        params = {k: v for k, v in (params or {}).items() if k != "skip_announcements"}
         # K线预热中不开新任务：预热会占满网络，并发筛选只会互相拖慢（实测两者一起跑双超时）
         if dash.scheduler.is_prewarming:
             return {"status": "busy", "reason": "K线预热中，请等预热完成后再试（首次启动约需几分钟）"}
@@ -168,6 +173,8 @@ class ScreenJob:
             return {"status": "busy", "reason": "看板正在自动刷新筛选，请稍后再试"}
         self._screening_lock_held = True
         self.params = params
+        # 配置在任务启动时固定：运行途中改参数配置只作用于下一轮筛选。
+        self.config_snapshot = dash.scheduler.config
         self.state = "running"
         self.error = None
         self.result = None
@@ -185,17 +192,32 @@ class ScreenJob:
 
             modes = set(self.params.get("modes") or ["strict", "low", "watchlist"])
             ctx: dict = {}
+            round_commit = dash.state_commit.RoundCommit(f"workbench-{time.strftime('%H%M%S')}")
 
             def _worker() -> None:
                 try:
                     t0 = time.time()
+                    config = self.config_snapshot or dash.scheduler.config
                     ctx["result"] = engine_run(
                         modes=modes,
                         workers=6,
                         top=int(self.params.get("top") or 15),
-                        skip_announcements=bool(self.params.get("skip_announcements")),
+                        # 服务端强制：正式筛选必须执行公告检查。跳过只保留给命令行诊断
+                        # （a_share_daily_screen --skip-announcements），不在买入选口上开放。
+                        skip_announcements=False,
                         skip_capital_ranking=bool(self.params.get("skip_capital_ranking")),
                         network_mode=self.params.get("network_mode") or "auto",
+                        settings_snapshot={
+                            "revision": int((config or {}).get("revision") or 1),
+                            "negative_super_view": dash.dashboard_settings.view_of(config),
+                            # 手动筛选默认继承看板配置里的交易板范围；请求体带 boards 时按本次覆盖
+                            # （覆盖值已在入口校验过，非法会直接 400，不会走到这里）。
+                            "enabled_boards": (
+                                self.params.get("boards")
+                                or dash.dashboard_settings.boards_of(config)
+                            ),
+                        },
+                        state_commit=round_commit,
                     )
                     ctx["elapsed"] = time.time() - t0
                 except Exception as e:  # noqa: BLE001
@@ -205,8 +227,10 @@ class ScreenJob:
             th.start()
             th.join(timeout=SCREENING_TIMEOUT_WB)
             if th.is_alive():
-                # Python 无法杀线程：引擎继续在后台跑完。锁不移交，由收割线程等
-                # 引擎真正结束后再释放，避免看板新任务与僵尸引擎竞争模块级状态。
+                # Python 无法杀线程：引擎继续在后台跑完，但本轮状态提交已中止，
+                # 僵尸引擎无法覆盖正式运行状态。锁不移交，由收割线程等引擎真正结束后
+                # 再释放，避免看板新任务与僵尸引擎竞争模块级状态。
+                round_commit.abort()
                 self._timeout_hit = True
                 self.state = "error"
                 self.error = (f"筛选超时（>{SCREENING_TIMEOUT_WB}s）。后台任务仍在执行中，"
@@ -227,20 +251,33 @@ class ScreenJob:
                 threading.Thread(target=_reap, daemon=True).start()
                 return  # 锁由 _reap 释放，不走 finally
             if "error" in ctx:
+                round_commit.abort()
                 self.state = "error"
                 self.error = str(ctx["error"])
                 return
             self.result = ctx["result"]
             self.elapsed = ctx.get("elapsed", 0.0)
             if "error" in (self.result or {}):
+                round_commit.abort()
                 self.state = "error"
                 self.error = str(self.result.get("error"))
+                return
+            # 本轮确认成功：统一提交暂存状态（资金基准/交集/观察池突破/K线缓存）。
+            try:
+                round_commit.commit()
+            except Exception as e:  # noqa: BLE001
+                print(f"[workbench] state commit failed: {e}", file=sys.stderr)
+                self.state = "error"
+                self.error = f"运行状态落盘失败：{e}"
                 return
             self._render_and_save_md()
             # 同步给看板：/api/data 与实时看板页面展示最新手动筛选结果
             dash.scheduler.latest_result = self.result
             self.state = "done"
         except Exception as e:  # noqa: BLE001
+            _rc = locals().get("round_commit")
+            if _rc is not None:
+                _rc.abort()
             self.state = "error"
             self.error = f"{type(e).__name__}: {e}"
         finally:
@@ -254,17 +291,28 @@ class ScreenJob:
     def _render_and_save_md(self) -> None:
         try:
             import a_share_daily_screen as screen
-            md = screen.render_markdown(self.result or {})
             min5 = dash.ScreeningScheduler._render_min5_table(self.result or {})
-            if min5:
-                md += "\n" + min5 + "\n"
-            self.md_text = md
+
+            def _render() -> str:
+                md = screen.render_markdown(self.result or {})
+                return md + ("\n" + min5 + "\n" if min5 else "")
+
+            self.md_text = _render()
             REPORTS_DIR.mkdir(parents=True, exist_ok=True)
             stamp = datetime.now().strftime("%Y%m%d_%H%M")
             path = REPORTS_DIR / f"A股筛选结果_{stamp}.md"
-            path.write_text(md, encoding="utf-8")
+            path.write_text(self.md_text, encoding="utf-8")
+            # 报告落盘后做只读影子判定回填徽标，并重写报告，保证页面与报告同口径。
+            if dash.ScreeningScheduler.refresh_shadow_badges(self.result or {}):
+                self.md_text = _render()
+                path.write_text(self.md_text, encoding="utf-8")
             # API 只返回项目内相对路径，避免把本机用户名/绝对路径暴露给浏览器。
-            self.md_path = str(path.relative_to(PROJECT_ROOT))
+            # 验证隔离时归档目录可能在项目外（A_SHARE_REPORT_DIR），取不到相对路径
+            # 就用绝对路径，不能让展示值把整个落盘流程带崩。
+            try:
+                self.md_path = str(path.relative_to(PROJECT_ROOT))
+            except ValueError:
+                self.md_path = str(path)
             dash.scheduler.latest_md_path = str(path)
             print(f"[workbench] markdown saved: {path}", file=sys.stderr)
         except Exception as e:  # noqa: BLE001
@@ -374,11 +422,103 @@ def _tool_track(code: str, date: str | None) -> dict:
     return {"text": _capture_stdout(track_stock_timeline, code, date)}
 
 
-def _tool_financials(code: str) -> dict:
+def _tool_financials(code: str, date: str | None = None) -> dict:
     from tools.query_financials import query_financial_profile
     if not code:
         return {"error": "缺少 code 参数"}
-    return query_financial_profile(code)
+    result = query_financial_profile(code, client=_data_http_client())
+    if date:
+        result["requested_as_of"] = date
+        result.setdefault("warnings", []).append("财务接口返回最新披露与当前估值快照，不支持按观察日回溯；报告期请以 report_period/published_at 核对")
+    return result
+
+
+_TICK_SOURCE = None
+_CONTEXT_SOURCE = None
+_EVENT_SOURCE = None
+_SENTIMENT_SOURCE = None
+_CALENDAR_SOURCE = None
+_DATA_HTTP_CLIENT = None
+
+
+def _data_http_client():
+    """Lazily share the measured-path/TLS client across toolbox adapters."""
+    global _DATA_HTTP_CLIENT
+    if _DATA_HTTP_CLIENT is None:
+        from tools.data_sources.http import project_http_client
+        _DATA_HTTP_CLIENT = project_http_client()
+    return _DATA_HTTP_CLIENT
+
+
+def _tool_ticks(code: str, *, date: str | None = None, force: bool = False, max_pages: int = 300) -> dict:
+    global _TICK_SOURCE
+    if not code:
+        return {"error": "缺少 code 参数"}
+    if date and date != datetime.now().date().isoformat():
+        return {
+            "status": "unsupported",
+            "source": "tencent_ticks",
+            "data_date": date,
+            "warnings": ["腾讯分笔适配器只支持当前交易日，不能把实时分笔伪装成历史观察日证据"],
+        }
+    from tools.data_sources.tencent import TencentTickSource
+    if _TICK_SOURCE is None:
+        _TICK_SOURCE = TencentTickSource(client=_data_http_client())
+    result = _TICK_SOURCE.fetch(code, force=force, max_pages=max(1, min(int(max_pages), 300))).to_dict()
+    if date:
+        result["requested_as_of"] = date
+    return result
+
+
+def _tool_context(code: str, topic: str, *, date: str | None = None, force: bool = False, limit: int = 20, contract: str | None = None) -> dict:
+    global _CONTEXT_SOURCE
+    from tools.data_sources.context import CONTEXT_TOPICS, ContextSource
+    if topic not in CONTEXT_TOPICS:
+        return {"error": f"topic 必须是: {', '.join(CONTEXT_TOPICS)}", "status": "unsupported"}
+    if not code:
+        return {"error": "缺少 code 参数"}
+    if _CONTEXT_SOURCE is None:
+        _CONTEXT_SOURCE = ContextSource(client=_data_http_client())
+    return _CONTEXT_SOURCE.fetch(code, topic=topic, as_of=date or None, force=force, limit=max(1, min(int(limit), 100)), contract=contract).to_dict()
+
+
+def _tool_events(code: str, *, date: str | None = None, types: str | None = None, force: bool = False, forward_days: int = 90) -> dict:
+    global _EVENT_SOURCE
+    from tools.data_sources.events import EVENT_TYPES, EastmoneyEventSource
+    if not code:
+        return {"error": "缺少 code 参数"}
+    selected = [item.strip() for item in (types or ",".join(EVENT_TYPES)).split(",") if item.strip()]
+    if any(item not in EVENT_TYPES for item in selected):
+        return {"error": f"types 必须来自: {', '.join(EVENT_TYPES)}", "status": "unsupported"}
+    if _EVENT_SOURCE is None:
+        _EVENT_SOURCE = EastmoneyEventSource(client=_data_http_client())
+    return _EVENT_SOURCE.fetch(code, event_types=selected, as_of=date or None, force=force, forward_days=max(0, min(int(forward_days), 365))).to_dict()
+
+
+def _tool_sentiment(*, date: str | None = None, force: bool = False) -> dict:
+    global _SENTIMENT_SOURCE
+    from tools.data_sources.sentiment import EastmoneySentimentSource
+    if _SENTIMENT_SOURCE is None:
+        _SENTIMENT_SOURCE = EastmoneySentimentSource(client=_data_http_client())
+    return _SENTIMENT_SOURCE.fetch(date or None, force=force).to_dict()
+
+
+def _tool_calendar(date: str, *, action: str = "is_open") -> dict:
+    global _CALENDAR_SOURCE
+    from tools.data_sources.calendar import TradingCalendarService
+    if not date:
+        return {"error": "缺少 date 参数（YYYY-MM-DD）", "status": "unsupported"}
+    if action not in {"is_open", "next", "session"}:
+        return {"error": "action 必须是 is_open/next/session", "status": "unsupported"}
+    if _CALENDAR_SOURCE is None:
+        _CALENDAR_SOURCE = TradingCalendarService(client=_data_http_client())
+    if action == "is_open":
+        result = _CALENDAR_SOURCE.is_open(date)
+    elif action == "next":
+        result = _CALENDAR_SOURCE.next_trading_day(date)
+    else:
+        result = _CALENDAR_SOURCE.next_session(date)
+    return result.to_dict()
 
 
 # ---------------------------------------------------------------------------
@@ -469,6 +609,14 @@ class WorkbenchHandler(dash.DashboardHandler):
         def g1(k: str) -> str:
             return (params.get(k) or [""])[0]
 
+        def i1(k: str, default: int, low: int, high: int) -> int:
+            raw = g1(k)
+            try:
+                value = int(raw) if raw else default
+            except ValueError:
+                raise ValueError(f"{k} 必须是整数")
+            return max(low, min(high, value))
+
         if path == "/api/wb/job":
             self._serve_json(JOB.status())
         elif path == "/api/wb/result":
@@ -490,7 +638,11 @@ class WorkbenchHandler(dash.DashboardHandler):
             self._serve_json(_tool_quote(
                 codes, minute=g1("minute") in ("1", "true"), kline=g1("kline") in ("1", "true")))
         elif path == "/api/wb/scan":
-            latest = int(g1("latest") or 0)
+            try:
+                latest = i1("latest", 0, 0, 500)
+            except ValueError as exc:
+                self._serve_json({"status": "unsupported", "error": str(exc)}, status=400)
+                return True
             self._serve_json(_tool_scan(g1("date") or None, latest, g1("file") or None))
         elif path == "/api/wb/position":
             self._serve_json(_tool_position(g1("date") or None))
@@ -499,7 +651,37 @@ class WorkbenchHandler(dash.DashboardHandler):
         elif path == "/api/wb/track":
             self._serve_json(_tool_track(g1("code"), g1("date") or None))
         elif path == "/api/wb/financials":
-            self._serve_json(_tool_financials(g1("code")))
+            self._serve_json(_tool_financials(g1("code"), g1("date") or None))
+        elif path == "/api/wb/ticks":
+            try:
+                max_pages = i1("max_pages", 300, 1, 300)
+            except ValueError as exc:
+                self._serve_json({"status": "unsupported", "error": str(exc)}, status=400)
+                return True
+            self._serve_json(_tool_ticks(g1("code"), date=g1("date") or None, force=g1("force") in ("1", "true"), max_pages=max_pages))
+        elif path == "/api/wb/context":
+            topic = g1("topic")
+            from tools.data_sources.context import CONTEXT_TOPICS
+            if topic not in CONTEXT_TOPICS:
+                self._serve_json({"status": "unsupported", "error": f"topic 必须是: {', '.join(CONTEXT_TOPICS)}"}, status=400)
+            else:
+                try:
+                    limit = i1("limit", 20, 1, 100)
+                except ValueError as exc:
+                    self._serve_json({"status": "unsupported", "error": str(exc)}, status=400)
+                    return True
+                self._serve_json(_tool_context(g1("code"), topic, date=g1("date") or None, force=g1("force") in ("1", "true"), limit=limit, contract=g1("contract") or None))
+        elif path == "/api/wb/events":
+            try:
+                forward_days = i1("forward_days", 90, 0, 365)
+            except ValueError as exc:
+                self._serve_json({"status": "unsupported", "error": str(exc)}, status=400)
+                return True
+            self._serve_json(_tool_events(g1("code"), date=g1("date") or None, types=g1("types") or None, force=g1("force") in ("1", "true"), forward_days=forward_days))
+        elif path == "/api/wb/sentiment":
+            self._serve_json(_tool_sentiment(date=g1("date") or None, force=g1("force") in ("1", "true")))
+        elif path == "/api/wb/calendar":
+            self._serve_json(_tool_calendar(g1("date"), action=g1("action") or "is_open"))
         else:
             return False
         return True
@@ -570,7 +752,21 @@ class WorkbenchHandler(dash.DashboardHandler):
             except json.JSONDecodeError:
                 self.send_error(400, "Invalid JSON")
                 return
-            self._serve_json(JOB.start(body if isinstance(body, dict) else {}))
+            if not isinstance(body, dict):
+                self._serve_json({"status": "error", "error": "请求体必须是对象"}, status=400)
+                return
+            # 交易板覆盖：**未提供**才继承已保存配置；**提供了但非法**必须 400。
+            # 静默回退到已保存值并不一定更窄——保存的是三板时，一个写错的请求照样跑三板，
+            # 用户却以为覆盖生效了，无从察觉。
+            override, boards_error = dash.dashboard_settings.parse_request_boards(body.get("boards"))
+            if boards_error:
+                self._serve_json({"status": "error", "error": boards_error}, status=400)
+                return
+            if override:
+                body["boards"] = override
+            else:
+                body.pop("boards", None)
+            self._serve_json(JOB.start(body))
         else:
             super().do_POST()
 
@@ -628,41 +824,42 @@ def main() -> int:
               f" web_workbench.py --port <其它端口>", file=sys.stderr)
         return 1
 
-    if bound_port != args.port:
-        print(f"[workbench] 已改用端口 {bound_port}（原 {args.port} 不可用）", file=sys.stderr)
+    # 端口顺延后提示实际使用的端口（server.server_address[1] 是真实绑定端口）。
+    if server.server_address[1] != args.port:
+        print(f"[workbench] 已改用端口 {server.server_address[1]}"
+              f"（原 {args.port} 不可用）", file=sys.stderr)
 
-    # 把本工作台的服务器交给看板调度器，使 15:15 收盘自动退出对本进程生效。
-    # 缺了这一步，调度器只会去关 realtime_dashboard 直启模式下的模块级 _server
-    # （此处为 None），于是调度线程自行退出而主线程 serve_forever() 永久阻塞，
-    # 进程一直挂到下次启动被 _kill_stale_port_windows 杀掉。
-    def _shutdown_workbench_server() -> None:
-        threading.Thread(target=server.shutdown, daemon=True).start()
-
-    dash._server = server
-    dash.scheduler.shutdown_hook = _shutdown_workbench_server
-
-    if args.no_dashboard_refresh:
-        print("[workbench] dashboard auto-refresh disabled (--no-dashboard-refresh)", file=sys.stderr)
-    else:
-        dash.scheduler.start()  # 看板自动刷新（交易时段内每 interval 秒一轮）
-    url = f"http://localhost:{bound_port}"
-    print(f"[workbench] server running at {url}")
-    print(f"[workbench] 工作台: {url}/workbench   实时看板: {url}/")
-    print(f"[workbench] trading hours: {dash.is_trading_hours()}")
-    print("[workbench] press Ctrl+C to stop")
-
-    if not args.no_browser:
-        try:
-            webbrowser.open(f"{url}/workbench")
-        except Exception:
-            pass
-
+    # 定时自动关闭通过 dash._server 请求服务退出，必须先接好引用再启动调度器。
+    dash._attach_server(server)
     try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\n[workbench] shutting down...")
-        dash.scheduler._archive_markdown()
-        server.shutdown()
+        if args.no_dashboard_refresh:
+            print("[workbench] dashboard auto-refresh disabled (--no-dashboard-refresh)", file=sys.stderr)
+        else:
+            dash.scheduler.start()  # 看板自动刷新（交易时段内每 interval 秒一轮）
+        url = f"http://localhost:{server.server_address[1]}"
+        print(f"[workbench] server running at {url}")
+        print(f"[workbench] 工作台: {url}/workbench   实时看板: {url}/")
+        print(f"[workbench] trading hours: {dash.is_trading_hours()}")
+        print("[workbench] press Ctrl+C to stop")
+
+        if not args.no_browser:
+            try:
+                webbrowser.open(f"{url}/workbench")
+            except Exception:
+                pass
+
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            print("\n[workbench] shutting down...")
+            dash.scheduler._archive_markdown()
+            # serve_forever 已因 Ctrl+C 退出；不要在同一线程调用 shutdown()。
+    finally:
+        dash.scheduler.stop()
+        try:
+            server.server_close()
+        finally:
+            dash._detach_server(server)
     return 0
 
 

@@ -6,6 +6,7 @@
 """
 
 import os
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -30,6 +31,8 @@ class NetworkPathTests(unittest.TestCase):
         np.invalidate()
         np._current_label = None
         np._last_switch_reason = ""
+        np._independent_candidates = None
+        np._independent_candidates_at = 0.0
         np._fail_streak.clear()
         np._cooldown_until.clear()
 
@@ -160,6 +163,24 @@ class NetworkPathTests(unittest.TestCase):
             np.best_paths()
         self.assertEqual(pp.call_count, 2, "全失败时负缓存应更短")
 
+    def test_deadline_discards_late_probe_and_does_not_cache(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_probe(label, proxy):
+            started.set()
+            release.wait(timeout=2.0)
+            return _path(label, proxy, 10.0)
+
+        with patch.object(np, "candidate_paths", return_value=[("直连", None)]), \
+             patch.object(np, "_probe_one", side_effect=slow_probe):
+            paths = np.best_paths(deadline=time.monotonic() + 0.05)
+        self.assertEqual(paths, [])
+        self.assertIsNone(np._cached_paths)
+        release.set()
+        self.assertTrue(started.wait(timeout=0.2))
+        self.assertIsNone(np._cached_paths, "迟到探测结果不得回写全局缓存")
+
     def test_invalidate_forces_reprobe(self):
         with patch.object(np, "probe_paths", return_value=[_path("直连", None, 50.0)]) as pp:
             np.best_paths()
@@ -222,6 +243,34 @@ class NetworkPathTests(unittest.TestCase):
              patch.object(np, "_session_for", return_value=sentinel):
             np.ordered_sessions(sentinel)
         self.assertEqual(np._current_label, "代理A")
+
+    def test_independent_endpoint_can_try_candidates_after_eastmoney_negative_cache(self):
+        direct = object()
+        proxy_session = object()
+        candidates = [
+            ("直连", None),
+            ("代理127.0.0.1:7890", "http://127.0.0.1:7890"),
+        ]
+        with patch.object(np, "requests", object()), \
+             patch.object(np, "best_paths", return_value=[]), \
+             patch.object(np, "candidate_paths", return_value=candidates), \
+             patch.object(np, "_session_for", return_value=proxy_session):
+            got = np.ordered_independent_sessions(direct)
+
+        self.assertEqual(got, [("直连", direct), ("代理127.0.0.1:7890", proxy_session)])
+
+    def test_independent_endpoint_respects_route_cooldown(self):
+        direct = object()
+        proxy_session = object()
+        candidates = [("直连", None), ("代理A", "http://127.0.0.1:7890")]
+        with patch.object(np, "requests", object()), \
+             patch.object(np, "best_paths", return_value=[]), \
+             patch.object(np, "candidate_paths", return_value=candidates), \
+             patch.object(np, "_in_cooldown", side_effect=lambda label: label == "直连"), \
+             patch.object(np, "_session_for", return_value=proxy_session):
+            got = np.ordered_independent_sessions(direct)
+
+        self.assertEqual(got, [("代理A", proxy_session)])
 
     # ---------- 配置 ----------
     def test_load_candidate_ports_falls_back_on_missing_file(self):

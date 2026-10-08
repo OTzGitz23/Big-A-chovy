@@ -20,9 +20,9 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 class _FakeDashboardHandler(BaseHTTPRequestHandler):
     """Minimal dashboard surface so the workbench can be tested offline."""
 
-    def _serve_json(self, data: object) -> None:
+    def _serve_json(self, data: object, status: int = 200) -> None:
         content = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(content)))
         self._send_cors_headers()
@@ -61,6 +61,9 @@ def _load_workbench():
     fake_dash.DashboardHandler = _FakeDashboardHandler
     fake_dash.MIME_TYPES = {}
     fake_dash.PORT = 8765
+    # 工作台的报告归档目录与看板同源（REPORTS_DIR = dash.MD_OUTPUT_DIR）；
+    # 桩模块必须照实暴露该属性，否则这里测的就不是真实接线。
+    fake_dash.MD_OUTPUT_DIR = SCRIPT_DIR.parent.parent / "筛选结果"
     fake_dash._sanitize_json = lambda obj: obj
     fake_dash.is_trading_hours = lambda: False
     fake_dash.scheduler = types.SimpleNamespace(

@@ -7,7 +7,6 @@
 
 import sys
 import json
-import ssl
 import urllib.request
 import argparse
 from pathlib import Path
@@ -17,8 +16,9 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "daily-stock-analysis" /
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 import tencent_kline  # noqa: E402  腾讯日 K 主机列表单一来源
+import tls_context  # noqa: E402  TLS 校验上下文唯一来源（默认校验证书）
 
-ssl_ctx = ssl._create_unverified_context()
+ssl_ctx = tls_context.build_context()
 
 def normalize_code(code: str) -> str:
     """自动添加市场前缀 sh / sz"""
@@ -28,6 +28,20 @@ def normalize_code(code: str) -> str:
     if code_clean.startswith("6") or code_clean.startswith("9"):
         return f"sh{code_clean}"
     return f"sz{code_clean}"
+
+
+def _quote_number(parts: List[str], index: int) -> float:
+    """Read one optional numeric Tencent field without shifting its sibling."""
+    if index >= len(parts):
+        return 0.0
+    value = parts[index].strip().strip('"')
+    if not value:
+        return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
 
 def fetch_realtime_quotes(codes: List[str]) -> Dict[str, Dict[str, Any]]:
     """批量查询实时行情与五档买卖盘口"""
@@ -89,8 +103,9 @@ def fetch_realtime_quotes(codes: List[str]) -> Dict[str, Dict[str, Any]]:
             "time": time_str,
             "buy_orders": buy_orders,
             "sell_orders": sell_orders,
-            "zt": float(parts[48]) if len(parts) > 48 and parts[48] else 0.0,
-            "dt": float(parts[47]) if len(parts) > 47 and parts[47] else 0.0,
+            # 腾讯行情零基字段：47 为涨停价，48 为跌停价。
+            "zt": _quote_number(parts, 47),
+            "dt": _quote_number(parts, 48),
         }
 
     return results
