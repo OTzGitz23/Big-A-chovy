@@ -44,3 +44,8 @@ tools/shadow_data/shadow_samples.json
 # Local reports and decision records may contain personal trading data
 筛选结果/
 决策记录/
+
+# Runtime cache lock files (tools/data_sources/cache.py). A file that already
+# starts with "." yields a "..name.lock" name, which shows up as stray noise.
+*.lock
+.*.lock
