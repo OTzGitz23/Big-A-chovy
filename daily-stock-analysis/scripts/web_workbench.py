@@ -16,8 +16,8 @@
     Windows 需要 tzdata 包提供 IANA 时区（代码内自动提示）。
 
 运行：
-  python web_workbench.py [--port 47321] [--no-browser]
-  浏览器打开 http://localhost:47321/workbench （实时看板仍在 /）
+  python web_workbench.py [--port 38473] [--no-browser]
+  浏览器打开 http://localhost:38473/workbench （实时看板仍在 /）
 """
 from __future__ import annotations
 
@@ -119,7 +119,7 @@ def _kill_stale_port_windows(port: int) -> None:
     pids: set[str] = set()
     for line in out.splitlines():
         parts = line.split()
-        # TCP    0.0.0.0:47321    0.0.0.0:0    LISTENING    12345
+        # TCP    0.0.0.0:38473    0.0.0.0:0    LISTENING    12345
         if len(parts) >= 5 and parts[0].upper() == "TCP" and parts[3].upper() == "LISTENING":
             local = parts[1]
             if local.rsplit(":", 1)[-1] == str(port):
