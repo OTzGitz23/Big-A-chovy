@@ -143,9 +143,17 @@ function renderEntryExit(v, row) {
   const sl = row.stop_loss;
   const slPct = row.stop_loss_pct;
   const tp1 = row.take_profit_1;
-  const tp2 = row.take_profit_2;
   const rr = row.rr_ratio;
-  return `<span class="entry-exit">止损<span class="sl">${sl}</span>(${slPct}%) → 止盈<span class="tp">${tp1}</span>/<span class="tp">${tp2}</span> <span class="rr">RR${rr || "-"}</span></span>`;
+  const basis = row.exit_reference_basis || "按现价估算；实际计划按买点价重算";
+  return `<span class="entry-exit"><small>${basis}（参考价${row.entry_reference_price ?? "-"}）</small>参考止损<span class="sl">${sl}</span>(${slPct}%) → +2%参考目标<span class="tp">${tp1 ?? "-"}</span> <span class="rr">RR参考${rr ?? "-"}</span></span>`;
+}
+
+function renderCapitalClass(v, row) {
+  if (!row.capital_class_confirmed) {
+    const candidate = row.capital_class_candidate || "评级待核验";
+    return `<span class="badge badge-maybe">未确认</span><small>快照候选：${candidate}</small>`;
+  }
+  return `<span class="badge badge-purple">${v || "-"}</span>`;
 }
 
 // ── 警告标签渲染 ──
@@ -489,7 +497,7 @@ const COLS = {
       } },
   ],
 
-  // ── 低开洗盘：低开≥2% + 翻红 + 均价线上 + 当日主力净流入 + 20日持续净流入 ──
+  // ── 低开观察：必须高于昨收，20日条件单独标出数据是否足够 ──
   "low-open": [
     { k: "code", l: "代码", c: "code" },
     { k: "name", l: "名称", c: "name" },
@@ -499,6 +507,7 @@ const COLS = {
     { k: "low_open_pct", l: "低开%", c: "num", r: (v) => (isNumber(v) ? `<span class="warn">${Number(v).toFixed(2)}</span>` : "-") },
     { k: "main_net", l: "主力净流入", c: "num", r: (v) => fmtPct(v, 1) },
     { k: "persistent_net", l: "20日累计净流入", c: "num", r: fmtFlow },
+    { k: "persistent_flow_status", l: "20日验证" },
     { k: "flow_status", l: "资金状态", r: flowBadge },
   ],
 
@@ -633,14 +642,15 @@ const COLS = {
     { k: "warn", l: "警告", r: renderWarn },
   ],
   capital: [
-    { k: "capital_class", l: "资金类", r: (v) => `<span class="badge badge-purple">${v || "-"}</span>` },
+    { k: "capital_class", l: "资金类", r: renderCapitalClass },
     { k: "pool_source", l: "来源" },
     { k: "code", l: "代码", c: "code" },
     { k: "name", l: "名称", c: "name" },
     { k: "board_label", l: "交易板", c: "board" },
     { k: "price", l: "现价", c: "num", r: fmtPrice },
     { k: "change", l: "涨幅", c: "num", r: (v) => `<span class="${colorChange(v)}">${fmtPct(v)}</span>` },
-    { k: "capital_score", l: "评分", c: "num", r: (v) => (v != null ? v.toFixed(1) : "-") },
+    { k: "capital_score", l: "正式评分", c: "num", r: (v) => (v != null ? v.toFixed(1) : "-") },
+    { k: "sector_experiment_score", l: "板块实验分（不计正式评级）", c: "num", r: (v) => (v != null ? v.toFixed(1) : "-") },
     { k: "main_net", l: "主力净额", c: "num", r: fmtFlow },
     { k: "main_pct", l: "净占比", c: "num", r: (v) => fmtPct(v, 1) },
     { k: "super_net", l: "超大单", c: "num", r: fmtFlow },
@@ -753,6 +763,7 @@ const COLS = {
     { k: "vwap_state", l: "均价线" },
     { k: "main_pct", l: "主力净占比", c: "num", r: (v) => fmtPct(v, 1) },
     { k: "persistent_net", l: "20日累计净流入", c: "num", r: fmtAmount },
+    { k: "persistent_flow_status", l: "20日验证" },
     { k: "flow_status", l: "资金状态", r: flowBadge },
     { k: "risk", l: "风险" },
     { k: "announcement_risk", l: "公告", r: riskBadge },
@@ -797,7 +808,7 @@ const TAB_TITLES = {
   watchlist: "明日观察池",
   sectors: "相关板块指数",
   sticky: "跟踪中（候选黏性）",
-  "low-open": "低开洗盘（低开≥2%+翻红+均价线上+当日主力净流入+20日持续净流入）",
+  "low-open": "低开观察（高于昨收、站上均价线；20个完整交易日资金历史不足时不通过）",
   "neg-super": "负超单观察（独立列表 · 仅观察 · 真实仓一票否决不变）",
 };
 
@@ -808,7 +819,7 @@ const TAB_NOTES = {
   late: "首次交集即过热（涨幅>4.6%/距VWAP>1.2%/换手>7%/脉冲大阳/高位回撤>1.5%/无共振），已标记迟到，不提供买点。",
   "trend-obs": "趋势观察池比严格趋势池宽一些，避免大跌或修复行情中趋势池完全空掉。",
   sticky: "进入过超短池/自选的股票，退出候选池后仍跟踪 15 分钟，便于继续验证买墙后续与量能。人工关注的股票持续跟踪。",
-  "low-open": "低开洗盘：低开≥2% 且开盘翻红站上均价线 + 当日主力净流入为正 + 20日主力持续净流入（按会话累计资金流验证）；匹配「恐慌日逆势吸筹」型主力票。",
+  "low-open": "低开观察：低开≥2%、现价高于昨收并站上均价线、当日主力净流入为正，且此前最近20个已完整结算交易日累计主力净流入为正；盘中快照不替代日频历史，数据不足时不通过。",
   "neg-super": "超大单为负仍是一票否决，本表不构成买入依据。仅当参数配置的「负超单观察」开启时显示。逐项未通过门槛如实列出（含「不满足 absolute 主导」），不得当作“仅差一个条件即可买”。影子徽标由报告落盘后的只读判定器回填：历史不足、报告尚未落盘或该股不在判定器的低吸表中显示「未完成判定」。",
 };
 
@@ -952,7 +963,6 @@ function renderFooter(data) {
   const cfg = data.intersection_config || {};
   const meta = data.intersection_config_meta || {};
   const parts = [];
-  if (cfg.version) parts.push(`参数版本: ${cfg.version}`);
   if (cfg.source) parts.push(`来源: ${cfg.source}`);
   if (cfg.confirmation_snapshots) parts.push(`确认快照: ${cfg.confirmation_snapshots}次`);
   if (cfg.morning_cutoff) parts.push(`上午截止: ${cfg.morning_cutoff}`);
@@ -988,17 +998,14 @@ function renderConfigChip(status) {
     ? '<div class="banner banner-snapshot">⚠️ 当前展示的快照由旧口径生成：当时创业板/科创板只进观察列表。当前设置已是三板统一参与正式筛选，两者不可直接比较。</div>'
     : "";
   const snapView = viewText(status.negative_super_view_snapshot);
-  const curRev = status.config_revision;
-  const snapRev = status.config_revision_snapshot;
-  let text;
+  let text = `负超单：${curView} · 保存时间：${status.config_updated_at || "尚未保存"}`;
   let tone = "config-chip";
   if (status.config_pending) {
     // 待生效期间：当前设置与当前快照是两个口径，必须分别写清楚，不能混在一句里。
-    text = `当前设置：${curView}（v${curRev}）；当前快照：${snapView || "未生成"}` +
-      `（${snapRev != null ? "v" + snapRev : "-"}）`;
+    text += ` · 待下一轮生效（当前快照：${snapView || "未生成"}）`;
     tone += " pending";
-  } else {
-    text = `负超单：${curView} · 快照使用配置 ${snapRev != null ? "v" + snapRev : "待生成"}`;
+  } else if (!status.has_result) {
+    text += " · 等待首轮筛选";
   }
   if (status.config_error) {
     text += "（配置回退默认）";

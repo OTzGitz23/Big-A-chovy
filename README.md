@@ -2,7 +2,7 @@
 
 # A 股量化筛选工作台
 
-[![Latest preview release](https://img.shields.io/github/v/release/LuQTest/Big-A-chovy?include_prereleases&label=latest%20preview&style=flat-square)](https://github.com/LuQTest/Big-A-chovy/releases)
+[![Latest release](https://img.shields.io/github/v/release/LuQTest/Big-A-chovy?label=latest%20release&style=flat-square)](https://github.com/LuQTest/Big-A-chovy/releases)
 [![GitHub stars](https://img.shields.io/github/stars/LuQTest/Big-A-chovy?style=flat-square&label=stars)](https://github.com/LuQTest/Big-A-chovy/stargazers)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE)
 
@@ -10,15 +10,41 @@
 
 它负责查询行情、计算筛选条件、生成报告和维护观察状态；**不会自动下单**。筛选结果只是发现候选，买卖、仓位和止损仍应按照项目规则人工确认。
 
+### 功能概览
+
+- 实时看板：自动刷新行情、资金、公告和筛选状态，并集中显示数据时点、来源、降级告警、任务占用和自动刷新状态。
+- 筛选工作台：按本次任务选择筛选模式、交易板、公告检查和资金排名，运行一次筛选并查看结果。
+- 报告库：同时读取根目录平铺报告与 `筛选结果/YYYYMMDD/` 归档，按报告文件名中的交易日和时间合并、排序，支持按日期/时间检索和继续查看筛选。
+- 证据查询：提供行情/分时/五档、财务、交易日历、公告与事件、板块和上下文等查询工具，明确区分 `ok`、`empty`、`partial`、`stale` 和 `unavailable`。
+- T+1 核验：只在官方交易日、目标日期和共享目标时刻都可验证时生成早盘证据；历史分钟目标不保证可追溯，不能用当前数据替代历史目标。
+
 职责边界：`daily-stock-analysis` 仅是筛选与报告发现工具，不承担最终买卖、仓位或持仓裁决。最终决策入口是 `盘中` skill，交易规则以根目录 `选股框架.md` 为准，实际持仓以 `决策记录/` 为准。
 
 ## 版本标识
 
-- 当前开发预览版：[v0.6.0-preview.2](https://github.com/LuQTest/Big-A-chovy/releases/tag/v0.6.0-preview.2)，修正公告总量冲突、行情涨跌停价与财务字段映射，并加固影子样本事务、结算校验和工作台生命周期；仍为预览版。
-- Docker 发布版：[v0.6.0-docker.2](https://github.com/LuQTest/Big-A-chovy/releases/tag/v0.6.0-docker.2)，基于同一源码提供 `linux/amd64` 和 `linux/arm64` 容器镜像。
-- GitHub 保留上一轮回退版 `v0.6.0-preview.1` / `v0.6.0-docker.1` 和稳定 Latest `v0.5.0-docker.4`。更早的 `v0.5.0-preview.*`、`v0.5.0-docker.1`–`.3`、`v0.4.0-*`、`v0.3.5-preview.1` 与 `v0.3.4` Release/tag 已清理；Git 提交历史和 GHCR 镜像版本不受影响。
+- 当前正式版：[v0.7.2](https://github.com/LuQTest/Big-A-chovy/releases/tag/v0.7.2)，源码发布、容器镜像和文档对应同一最终提交。
+- Docker 镜像：`ghcr.io/luqtest/big-a-chovy:v0.7.2`，由 GitHub Actions 发布到 GitHub Container Registry；支持的架构以该次构建的清单为准。
+- `v0.7.1` 正式版及其镜像继续保留作为回退；更早的预览 Release 页面已清理，Git tag 历史不被补丁版发布移动或覆盖。
 
 完整更新记录见 [`CHANGELOG.md`](CHANGELOG.md)。
+
+### 软件内更新提示
+
+工作台和实时看板顶部会显示本机版本，发现同渠道新版本时给出提示、更新内容和升级命令。**不自动下载、不自动替换、不重启**，也不会在交易时段弹窗打断操作。
+
+- **版本单一来源**：仓库根 `VERSION` 只保存共同的基础版本（如 `0.7.2`），渠道由发布 tag 提供——`v0.7.2` 是正式版、`v0.7.2-preview.2` 是预览版、`v0.7.2-docker.2` 是容器版。
+- **只比同一渠道**：正式版只与正式版比，预览版只与预览版比，容器版只与容器版比。不同渠道的版本不互相比大小——`0.6.0-docker.2` 与 `0.6.0-preview.2` 是同一源码提交的两种打包形态。
+- **升级命令按实际安装方式给出**：源码安装是 `git pull`；引用 GHCR 镜像的 Compose 是 `docker compose pull && docker compose up -d`；本仓库自带的 `docker-compose.yml` 用的是本地 `build`，因此提示 `git pull && docker compose up -d --build`。
+- **离线、限流或上游异常时完全静默**：只是没有提示，软件照常使用。
+
+版本对账（发布流水线会跑同一套校验）：
+
+```bash
+python3 tools/validate_version.py                 # VERSION 与 CHANGELOG 顶部条目
+python3 tools/validate_version.py --tag v0.7.2    # 额外校验发布 tag 的基础版本与渠道
+```
+
+设计与边界见 [`docs/更新检查.md`](docs/更新检查.md)。
 
 ## GitHub Star History
 
@@ -50,6 +76,16 @@ python3 -m pip install -r requirements.txt
 
 `requests` 用于更稳定地访问行情接口；`pyyaml` 用于读取决策记录中的持仓快照。没有这些库时，部分功能仍可使用，但网络或 YAML 解析能力可能降级。
 
+从源码安装或升级到正式版：
+
+```bash
+git fetch origin --tags
+git checkout v0.7.2
+python3 -m pip install -r requirements.txt
+```
+
+后续升级时先阅读 `CHANGELOG.md`，再切换到新的正式 tag；源码运行和 Docker 运行使用同一 tag 的代码，二者的功能与规则口径保持一致。
+
 ### Web 工作台（B/S 架构，推荐 Windows 用户使用）
 
 不想受限于 macOS GUI？启动 Web 工作台，在浏览器里使用筛选、报告库和工具箱：
@@ -68,6 +104,8 @@ python3 daily-stock-analysis/scripts/web_workbench.py
 两个页面共用同一套导航与运行状态：顶部同一组视图切换「实时看板｜筛选工作台」（同页切换、标出当前位置），下方同一条运行状态条显示**数据时点 / 数据源 / 自动刷新 / 引擎占用**，并把会影响判读的异常做成旗标（降级数据、最近快照、行情不完整、东财冷却、代理断开、**公告检查或资金排名被关闭**）。看板顶部原来分散的「数据时间 / 数据源 / 下次刷新 / 行情不完整 / K 线缓存」五处展示已收敛进这条状态条，同一事实不再重复出现。
 
 运行选项两页同名同极性：勾选=执行（`公告检查`、`资金排名`），作用域分别标注——工作台是**本次任务参数**（只影响这一次手动筛选），看板顶部是**看板默认**（持久设置，对每一轮自动刷新生效）；工作台会显示看板当前的这两个开关状态，避免改错地方。动作被占用时不静默，会在页面内提示原因（例如「看板自动刷新正在运行」）。
+
+看板默认配置保存成功后会显示保存时间；配置冲突或保存失败会在页面内提示。已保存的配置从下一轮自动刷新开始生效，不会改变已经运行中的那一轮；工作台本次任务参数仍只作用于当前手动筛选。
 
 Web 工作台默认只监听本机，避免报告、持仓和决策快照被局域网读取。确实需要手机或其他电脑访问时，显式运行：
 
@@ -103,11 +141,13 @@ HTTP_PROXY=http://host.docker.internal:7890
 HTTPS_PROXY=http://host.docker.internal:7890
 ```
 
-Docker 运行版同时启动 Web 工作台和实时看板，不启动 Finder、macOS `.command` 启动器或桌面 GUI；宿主机端口默认只绑定 `127.0.0.1`，需要局域网访问时应明确修改 compose 端口映射并确认网络可信。它同样不会自动下单。发布标签会由 GitHub Actions 构建并发布多架构镜像到 GitHub Container Registry；如果首次发布后镜像仍是私有的，需要在 GitHub Packages 中将其改为 Public。
+Docker 运行版同时启动 Web 工作台和实时看板，不启动 Finder、macOS `.command` 启动器或桌面 GUI；宿主机端口默认只绑定 `127.0.0.1`，需要局域网访问时应明确修改 compose 端口映射并确认网络可信。它同样不会自动下单。正式 tag 与 Docker 镜像来自同一最终源码提交；GitHub Actions 负责构建并发布已验证架构的镜像到 GitHub Container Registry。
 
 ```bash
-docker pull ghcr.io/luqtest/big-a-chovy:v0.6.0-docker.2
+docker pull ghcr.io/luqtest/big-a-chovy:v0.7.2
 ```
+
+`docker compose up -d --build` 会从当前源码 checkout 本地构建；如果需要直接使用已发布镜像，请使用上面的正式 tag，并自行确认宿主机挂载的报告、决策记录、持仓、影子样本和运行状态目录权限。源码版与镜像版都只提供筛选、证据和查询能力，不执行交易。
 
 ### 1. 启动普通筛选 GUI
 
@@ -219,6 +259,8 @@ curl -s http://localhost:38473/api/md      # 最新 Markdown 报告
 
 无论筛选结果多强，市场环境、板块共振、个股结构和实际买点有一项不满足，都应选择等待或空仓。
 
+报告库会把根目录平铺报告和按日期归档的报告合并后，再按文件名中的交易日与时间排序；空的日期目录不会制造虚假报告，文件名无法解析日期/时间的文件也不会混入正常序列。
+
 ## 三、报告和辅助工具
 
 这些工具都应在项目根目录执行：
@@ -270,13 +312,15 @@ python3 tools/watch_sector.py 600219 有色金属 --date 20260824 --from 1005
 python3 tools/verify_t1.py 20260824
 ```
 
-这些新增查询均是证据/研究工具，不自动改变筛选评分、状态机、真实仓权限或个人决策记录。历史估值/ST/停牌查询的 BaoStock 依赖是可选的；未安装时返回 `unsupported`。通达信日线包使用股、元单位，跨日筹码模型要求换手率和复权口径可核验；缺失或混口径会拒绝推演。
+这些新增查询均是证据/研究工具，不自动改变筛选评分、状态机、真实仓权限或个人决策记录，也不会自动下单。历史估值/ST/停牌查询的 BaoStock 依赖是可选的；未安装时返回 `unsupported`。通达信日线包使用股、元单位，跨日筹码模型要求换手率和复权口径可核验；缺失或混口径会拒绝推演。
+
+`verify_t1.py` 的早盘核验以官方交易日历确定 T+1 日期，并要求行情响应中的证券、交易日期和共享目标时刻全部匹配；当前目标为 09:45，不会用 09:44 或其他相邻分钟替代。当前分钟接口只保证当日实时/近期可用数据，历史目标分钟若无法追溯会明确返回不可用，不能据此判定历史目标价格或收益。
 
 ### 影子验证工具
 
 影子验证只用于模拟数据统计，不能直接转化为真实仓买入依据：
 
-> ⚠️ **真实样本库保护**：工程修复和离线回归不会自动解锁真实库写入。禁止对默认本机影子库运行无参数或带 `--date` 的 `shadow_tracker.py` 扫描，也禁止对真实库使用 `detect_divergence_leader.py --record`；`--report` 仅作只读查看。测试必须设置临时 `A_SHARE_SHADOW_DATA_DIR`，并只使用人工报告和模拟行情。缺少 `fcntl` 跨进程锁的平台会明确拒绝影子库写入；Windows 原生行为尚未单独验收。真实历史库迁移、重算或恢复须另行制定方案并单独验收；测试通过、样本数量或代码版本均不构成授权。线下反馈提到的 `shadow_sample.py` 和 `每日收盘.bat` 不在当前工作副本中，先同步并核实后再使用。
+> ⚠️ **真实样本库保护**：工程修复和离线回归不会自动解锁真实库写入。禁止对默认本机影子库运行无参数或带 `--date` 的 `shadow_tracker.py` 扫描，也禁止对真实库使用 `detect_divergence_leader.py --record`；`--report` 仅作只读查看。测试必须设置临时 `A_SHARE_SHADOW_DATA_DIR`，并只使用人工报告和模拟行情。缺少 `fcntl` 与 `msvcrt` 两种跨进程锁原语的平台会明确拒绝影子库写入；Windows 原生锁由 Windows CI 验收。真实历史库迁移、重算或恢复须另行制定方案并单独验收；测试通过、样本数量或代码版本均不构成授权。线下反馈提到的 `shadow_sample.py` 和 `每日收盘.bat` 不在当前工作副本中，先同步并核实后再使用。
 
 ```bash
 # 只查看当前进度
@@ -345,6 +389,15 @@ git diff --cached --name-only
 确认没有报告、决策记录、持仓、缓存或密钥后再提交。不要使用 `git add -f` 强制添加被排除的文件。
 
 `sync_to_github.sh` 会执行 `git add -A`、自动提交并推送；使用前仍要确认本机私有目录已排除。GitHub 仓库若不是私有仓库，请不要上传真实持仓、交易金额、账户信息或个人决策记录。
+
+### 唯一的对外请求：版本检查
+
+工作台与实时看板启动后会在后台查询一次 GitHub 的 Release 列表（`api.github.com`），用于提示新版本。这是本项目**唯一**的对外请求。
+
+- 只发出版本检查请求本身，**不发送任何本机数据**：没有报告、没有持仓、没有决策记录、没有账户信息，也不带机器标识。
+- 24 小时内不会重复查询；离线、限流或接口异常时静默失败，不影响任何筛选与查询功能。
+- 关闭方式：启动前设置 `A_SHARE_UPDATE_CHECK=off`。
+- 检查结果的缓存写在运行状态目录（默认 `daily-stock-analysis/scripts/`，可用 `A_SHARE_STATE_DIR` 定向到临时目录），与报告归档和决策记录无关。
 
 ## 六、网络问题排查
 
@@ -473,11 +526,7 @@ python3 daily-stock-analysis/scripts/a_share_daily_screen.py --boards main chine
 
 ## 十一、规则文档
 
-使用前建议先阅读：
-
-- [`选股框架.md`](选股框架.md)：项目规则和参数总表。
-- [`daily-stock-analysis/references/screeners.md`](daily-stock-analysis/references/screeners.md)：筛选条件和输出字段。
-- [`daily-stock-analysis/references/trading-rules.md`](daily-stock-analysis/references/trading-rules.md)：市场、板块、个股、买点和仓位规则。
+交易规则与参数语义只读 [`选股框架.md`](选股框架.md)，决策流程使用上述项目盘中 Skill。共享机器参数维护在 [`tools/rule_config.py`](tools/rule_config.py)，筛选引擎不另设 AI 入口或交易规则说明。
 
 行情筛选不构成收益保证或个性化投资建议。任何真实交易都应以使用者自己的风险承受能力和交易纪律为准。
 
